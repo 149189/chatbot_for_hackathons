@@ -20,7 +20,7 @@ app = Flask(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL not found in environment variables")
-
+print("Database is connected")
 # Create SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
 
@@ -40,8 +40,7 @@ def load_data_from_db():
     df['Amount'] = df["Withdrawal(Dr)/ Deposit(Cr)"].apply(
         lambda x: float(x.split("(")[0].replace(",", "").strip())
     )
-    # Convert Date from string to datetime if needed
-    # (Assumes the date is stored as text in DD-MM-YYYY format, adjust format if necessary)
+    # Convert Date from string to datetime (assumes DD-MM-YYYY format)
     df['Date'] = pd.to_datetime(df['Date'], format="%d-%m-%Y")
     return df
 
@@ -136,49 +135,52 @@ def predict_next_week():
     """
     Expects JSON payload:
     {
-      "category": "Food"   // One of: Food, Travel, Investment, Utilities, Entertainment, Medical, Shopping
+      "category": "Food"   // OR "category": ["Food", "Travel", ...]
     }
-    This endpoint predicts the spending for the next week (7 days) for the specified category.
+    This endpoint predicts the spending for the next week (7 days) for the specified category or categories.
     """
     data = request.get_json()
     if not data or "category" not in data:
         return jsonify({"error": "Category is required"}), 400
 
-    category = data["category"]
+    categories = data["category"]
+    # If a single category string is provided, convert it to a list.
+    if not isinstance(categories, list):
+        categories = [categories]
 
     try:
         df = load_data_from_db()
     except Exception as e:
         return jsonify({"error": f"Error loading data from DB: {str(e)}"}), 500
 
-    ts_df = aggregate_category(df, category)
-    if ts_df is None:
-        return jsonify({"error": f"No data found for category {category}"}), 404
+    results = []
+    for cat in categories:
+        ts_df = aggregate_category(df, cat)
+        if ts_df is None:
+            results.append({"category": cat, "error": f"No data found for category {cat}"})
+            continue
 
-    series = ts_df['Amount'].values
+        series = ts_df['Amount'].values
+        # Fixed sequence length for model input (adjust if needed)
+        seq_len = 5
+        dataset = TimeSeriesDataset(series, seq_len)
+        if len(dataset) < 1:
+            results.append({"category": cat, "error": "Not enough data points for training"})
+            continue
 
-    # Fixed sequence length for model input (adjust if needed)
-    seq_len = 5
+        dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
+        model = TransformerTimeSeries()
+        train_model(model, dataloader, epochs=20, lr=0.001)
+        future_steps = 7
+        predictions = predict_future(model, series, seq_len, steps=future_steps)
+        total_predicted = sum(predictions)
+        results.append({
+            "category": cat,
+            "next_week_predictions": predictions,
+            "total_predicted_next_week": total_predicted
+        })
 
-    dataset = TimeSeriesDataset(series, seq_len)
-    if len(dataset) < 1:
-        return jsonify({"error": "Not enough data points for training"}), 400
-    dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
-
-    # Initialize and train the Transformer model
-    model = TransformerTimeSeries()
-    train_model(model, dataloader, epochs=20, lr=0.001)
-
-    # Predict spending for the next 7 days
-    future_steps = 7
-    predictions = predict_future(model, series, seq_len, steps=future_steps)
-    total_predicted = sum(predictions)
-
-    return jsonify({
-        "category": category,
-        "next_week_predictions": predictions,
-        "total_predicted_next_week": total_predicted
-    })
+    return jsonify(results)
 
 if __name__ == '__main__':
     app.run(debug=True)
