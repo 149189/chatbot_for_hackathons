@@ -30,10 +30,8 @@ Your responses must:
 # =========================== #
 
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel(
-    'gemini-2.0-flash',
-    system_instruction=SYSTEM_GUIDELINES
-)
+# Initialize the model without the system_instruction parameter.
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 def _build_cors_preflight_response():
     response = jsonify({"status": "preflight"})
@@ -65,4 +63,4 @@ def finance_chat():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    app.run(port=3000, debug=True)
